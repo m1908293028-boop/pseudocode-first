@@ -34,8 +34,8 @@ Every invocation writes `<project>/.claude/traces/YYYY-MM-DD-HHmmss-<slug>.md` â
 ## Install
 
 ```bash
-git clone https://github.com/m1908293028-boop/planning-like-coding.git \
-  ~/.claude/skills/planning-like-coding
+git clone https://github.com/m1908293028-boop/pseudocode-first.git \
+  ~/.claude/skills/pseudocode-first
 ```
 
 Or with skill managers:
