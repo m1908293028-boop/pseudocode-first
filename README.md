@@ -1,4 +1,4 @@
-# Planning Like Coding
+# Pseudocode First
 
 Treat agent orchestration like writing a program. Write pseudocode to decompose tasks, dispatch each function as an isolated sub-agent, assemble structured results — without polluting the main context.
 
