@@ -4,7 +4,7 @@
 
 User request: *"Check my Obsidian vault health — stale notes, broken links, orphan pages, tag consistency, and vault size trends."*
 
-Five independent dimensions. Classic planning-like-coding trigger.
+Five independent dimensions. Classic pseudocode-first trigger.
 
 ---
 

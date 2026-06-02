@@ -1,5 +1,5 @@
 ---
-name: planning-like-coding
+name: pseudocode-first
 description: >-
   Multi-dimensional analysis via isolated sub-agents: write pseudocode, dispatch
   functions as sub-agents, assemble structured returns. Use when the task needs
