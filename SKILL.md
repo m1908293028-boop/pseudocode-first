@@ -1,44 +1,73 @@
 ---
 name: planning-like-coding
 description: >-
-  Use whenever the user asks to analyze, audit, research, investigate, scan,
-  compare, or check multiple things. Triggers on tasks that involve collecting
-  data from 3+ independent sources and synthesizing a summary. Write natural-language
-  pseudocode first to decompose into functions, then execute each function as an
-  isolated sub-agent. Sub-agents return only structured results — their internal
-  context (search traces, intermediate reads, reasoning) never enters the main
-  agent context. This is the default approach for any multi-dimensional analysis
-  task unless the user specifies otherwise.
+  Multi-dimensional analysis via isolated sub-agents: write pseudocode, dispatch
+  functions as sub-agents, assemble structured returns. Use when the task needs
+  3+ independent searches/scans/audits across different directories, keywords,
+  or dimensions. Not for single-step tasks or tightly-coupled sequential steps.
 user-invocable: true
 disable-model-invocation: false
 when_to_use: >-
-  Also trigger when the user says "check X across the vault", "audit Y",
-  "scan all Z and compare", "find everything about A, B, and C", "do a
-  health check on...", "gather data from multiple places", or any request
-  that implies breadth (multiple directories / keywords / dimensions).
-  Prefer this skill over direct Grep/Bash chains when there are 3+ independent
-  search targets or when structured assembly is required.
-allowed-tools: Agent, Read, Write, Edit, Bash, Grep, Glob
+  Triggered by: "check X across the vault", "audit Y", "scan all Z and compare",
+  "find everything about A, B, and C", "do a health check on...", "gather data
+  from multiple places", or any request implying breadth (multiple directories /
+  keywords / dimensions). Prefer this over direct Grep/Bash chains when there are
+  3+ independent search targets or structured assembly is required.
+allowed-tools: Agent, Read, Write, Bash, Grep, Glob
 ---
 
 # Planning Like Coding
 
 Treat agent orchestration like writing a program. The main agent is `main()`. Sub-agents are function calls. Context isolation = scope.
 
-## Core Analogy
+## Trace File
 
-| Code | Agent |
-|------|-------|
-| Function signature | Pseudocode: goal + input + return type |
-| Arguments | Main agent passes task description + expected output format to sub-agent |
-| Function body | Sub-agent's internal search / read / reasoning |
-| Local variables | Sub-agent's context window (invisible to parent) |
-| Return value | Structured result matching the format main agent defined |
-| `main()` assembly | Main agent combines return values into final output |
+Every invocation writes a **trace file** — a human-readable log of what ran, in what order, and what each function found. The model **never reads this file**. It exists only for the user to inspect progress and audit results.
+
+**Location**: `<project-root>/.claude/traces/YYYY-MM-DD-HHmmss-<task-slug>.md`
+
+If `.claude/traces/` doesn't exist, create it (on Unix: `mkdir -p`; on Windows: `mkdir` handles intermediate directories natively). If there is no clear project root (e.g. working from `~`), fall back to `./.claude/traces/...` relative to the current working directory.
+
+**Full structure** (written incrementally across the workflow):
+
+```
+# Trace: <one-line task summary>
+**Started**: YYYY-MM-DD HH:MM:SS
+**Status**: running
+
+## Pseudocode
+(full pseudocode block with parallel/serial annotations)
+
+## Execution Log
+
+### func_X — completed HH:MM:SS (parallel|serial, batch N)
+- **Status**: success | failed | partial
+- **Evidence**: N data points found
+- **Sources**: N files/URLs consulted
+- **Contradictions**: N (within this function's own data)
+
+**Findings**:
+(human-readable summary — bullet lists for file paths, inline text for short strings)
+
+## Assembled Result
+(the final output shown to the user)
+
+## Execution Summary
+(table of aggregate stats — see Step 4)
+```
+
+**When to write each section:**
+
+| Event | Action |
+|-------|--------|
+| Pseudocode confirmed | Create file; write `# Trace` header, status, `## Pseudocode`, `## Execution Log` header |
+| Sub-agent returns | Append `### func_X` entry under Execution Log |
+| Assembly done | Append `## Assembled Result` + `## Execution Summary`; edit top to set status `complete` |
+| Aborted mid-execution | Edit top to set status `aborted`; append a note under Execution Log listing what failed |
 
 ## Workflow
 
-### 1. Write pseudocode first
+### 1. Write pseudocode
 
 Do NOT start executing. Output the plan:
 
@@ -58,61 +87,112 @@ func_A(input):
 func_B(input):
     Goal: one sentence describing what this function does
     Returns: [{field3: type, field4: type}, ...]
+
+func_C(dependency):
+    Goal: one sentence; depends on result_A.field1
+    Returns: {field5: type}
 ```
 
-- No data dependency → parallel
-- Data dependency → serial
+Execution strategy:
+- **No data dependency** → same parallel batch
+- **Depends on one prior result** → serial, after that function completes
+- **Depends on multiple prior results** → serial, after the LAST dependency completes (note in pseudocode: `// blocks on: A, B`)
+- **Max 5 per parallel batch** → split into successive batches in definition order
 
 ### 2. User confirms pseudocode
 
-Show the pseudocode to the user. Wait for explicit approval before dispatching sub-agents.
+Show the pseudocode. Wait for explicit approval before dispatching.
 
-If the user says "just go ahead" or "don't ask for confirmation", skip confirmation for this session but still write pseudocode internally — it forces you to think through decomposition before acting.
+If the user has said "just go ahead" or "don't ask for confirmation", skip confirmation for this session but still write pseudocode internally — it forces decomposition before action.
 
-If the user rejects or modifies the pseudocode, only adjust the functions that were flagged. Leave unrelated functions untouched.
+If the user modifies the pseudocode, only adjust the flagged functions. Leave unrelated ones untouched.
+
+**After confirmation**, create the trace file with the header, status `running`, and `## Pseudocode` section.
 
 ### 3. Dispatch sub-agents
 
-Each function = one sub-agent. Sub-agents never spawn other sub-agents (depth = 1). Sub-agent prompt must include:
-
+Each function = one sub-agent (depth = 1). Prompt must include:
 - The goal (one clear sentence)
-- The expected return format as JSON (fields, types, example structure)
-- Any input values from prior serial steps
+- Input values from prior serial steps, if any
+- The expected return format: `{ "meta": {...}, "data": {...} }` JSON
 
-All sub-agent returns must be JSON. No Markdown tables, no prose summaries — JSON only, so the main agent can merge results without parsing natural language.
+**Return format** (every sub-agent must follow this):
 
-**Parallel limit**: max 5 sub-agents per batch. If more than 5 functions are independent, batch them in definition order (first 5, then next 5, etc.).
+```json
+{
+  "meta": {
+    "evidence_count": <int>,
+    "source_count": <int>,
+    "contradiction_count": <int>
+  },
+  "data": { <function-specific fields> }
+}
+```
 
-**Sub-agent tools**: Explore agents get only read/search tools (Read, Grep, Glob). General-purpose agents may also use Write, Edit, Bash. Never give a sub-agent tools it doesn't need for its specific function.
+| Field | Meaning |
+|-------|---------|
+| `evidence_count` | How many concrete findings / data points / anomalies discovered |
+| `source_count` | How many distinct files, URLs, or data sources were consulted |
+| `contradiction_count` | Internal inconsistencies found within this function's own data (0 if none) |
+
+The `data` field holds the function-specific payload. No Markdown, no prose — JSON only, so the main agent merges results without parsing natural language.
+
+**After each sub-agent returns**, append to the trace file under `## Execution Log`:
+
+- Status line (success / failed / partial)
+- The three meta numbers with brief parenthetical descriptions
+- A **human-readable "Findings" summary** — convert paths to backticked relative links, convert short strings to inline text. Do NOT dump raw JSON here. The user reads this, not a parser.
+
+Example trace entry:
+```markdown
+### check_stale_notes — completed 14:30:23 (parallel, batch 1)
+- **Status**: success
+- **Evidence**: 3 (stale notes found)
+- **Sources**: 342 (.md files scanned)
+- **Contradictions**: 0
+
+**Findings**: 3 notes unmodified >90 days out of 342 total:
+- `20-Projects/archived-idea.md` — 213 days
+- `30-Knowledge/old-pattern.md` — 157 days
+- `00-Inbox/draft-2025-11.md` — 104 days
+```
+
+**Sub-agent tools**: Explore agents get only read/search tools (Read, Grep, Glob). General-purpose agents may also use Write, Edit, Bash. Never give a sub-agent tools it doesn't need.
+
+**Parallel limit**: max 5 per batch. If more than 5 independent functions, split into batches of 5 in definition order.
 
 **Error handling**:
 
 | Failure | Action |
 |---------|--------|
-| Sub-agent times out or crashes | Retry once with the same prompt. If it fails again, reduce scope or fall back to direct tools |
-| Sub-agent returns unparseable format (e.g. prose instead of JSON) | Re-prompt once with format emphasized. If still unparseable, note the gap and proceed with other results |
-| Sub-agent returns mostly valid but slightly malformed JSON | Extract usable fields manually, annotate which fields were recovered vs. missing |
-| Sub-agent returns empty / "not found" | Spot-check with a quick direct Grep to rule out wrong-directory errors. If confirmed empty, trust it and note in assembly |
-| Results from two sub-agents contradict each other | Main agent resolves with a single direct check (Grep/Bash). Do not re-run either sub-agent |
-| All sub-agents fail | Abort the batch. Report to user, suggest narrowing scope |
+| Sub-agent times out or crashes | Retry once. If it fails again, reduce scope or fall back to direct tools. In trace: `**Status**: failed`, note the error. |
+| Sub-agent returns prose instead of JSON | Re-prompt once with format emphasized. If still unparseable, extract what you can, note the gap, proceed. In trace: `**Status**: partial`. |
+| Sub-agent returns malformed but mostly valid JSON | Extract usable fields manually; annotate recovered vs. missing in trace. |
+| Sub-agent returns empty / "not found" | Spot-check with a direct Grep. If confirmed empty, trust it. In trace: `Evidence: 0`, note "confirmed empty via spot-check". |
+| Two sub-agents contradict each other | Do NOT re-run either. Resolve with one direct check (Grep/Bash). Append a `### resolution` note under Execution Log describing the conflict and resolution. |
+| All sub-agents fail | Abort. Report to user, suggest narrowing scope. Set trace status to `aborted`. |
 
 ### 4. Assemble results
 
-Main agent combines return values per the pseudocode's `assemble()` logic. Never inspect sub-agent internal context.
+Combine return values per the pseudocode's `assemble()` logic. Never inspect sub-agent internal context.
 
-## Context Passing Strategy
+After assembly, finalize the trace file:
+1. Append `## Assembled Result` with the final output
+2. Append `## Execution Summary`:
 
-Main agent and sub-agent contexts are physically isolated. Files the main agent read do NOT automatically appear in sub-agent context.
+```markdown
+| Metric | Value |
+|--------|-------|
+| Total functions | N |
+| Parallel batches | N |
+| Serial steps | N |
+| Succeeded / failed | N / N |
+| Contradictions found (cross-function) | N |
+| Trace file | (relative path) |
+```
 
-**Rule: Never read a large file just to pass it to a sub-agent.** That shifts cost without saving tokens. Exception: if the file is small (<2KB, ~500 tokens) and the sub-agent would need an expensive search to locate it, reading to pass can be a net win.
-
-| Situation | Action |
-|-----------|--------|
-| Main agent already read the file (sunk cost for another reason) | Pass content as sub-agent input — saves re-reading |
-| Main agent hasn't read it, would need to fetch it | Don't pass. Let sub-agent search independently |
-| Main agent can describe from memory | Pass brief description for targeted search |
-
-When `inherit_context` becomes available in Claude Code, main agent can zero-cost share already-loaded context with sub-agents. Until then, follow the table above.
+Do NOT sum `evidence_count` or `source_count` across functions — evidence from "3 broken links" and "184.3 MB disk usage" are different dimensions and a total is meaningless. Report per-function in the Assembled Result instead.
+3. Update the top-of-file status line from `running` to `complete`.
 
 ## Sub-agent Prompt Template
 
@@ -120,40 +200,46 @@ When `inherit_context` becomes available in Claude Code, main agent can zero-cos
 Goal: {func_X's goal}
 
 Input:
-{concrete parameters / context from main agent, if any}
+{concrete parameters from main agent, if any}
 
 Return format (strict):
-{field: type // description}
+{
+  "meta": {
+    "evidence_count": <int>,
+    "source_count": <int>,
+    "contradiction_count": <int>
+  },
+  "data": { <fields> }
+}
 
-Return only the structured result. No extra explanation.
+Return only the structured JSON. No extra explanation.
 ```
+
+## Context Passing
+
+Main agent and sub-agent contexts are physically isolated. **Never read a file ≥2KB just to pass it to a sub-agent** — that shifts cost without saving tokens.
+
+| Situation | Action |
+|-----------|--------|
+| Main agent already read the file (sunk cost) | Pass content — saves re-reading |
+| Main agent hasn't read it | Don't fetch it. Let sub-agent search independently |
+| Main agent can describe from memory | Pass brief description for targeted search |
+
+Exception: if the file is small (<2KB) and the sub-agent would need an expensive search to locate it, reading to pass can be a net win.
 
 ## When to Use
 
-- Task has 3+ independent exploration dimensions
-- Scanning / counting across non-overlapping directories or files
+- 3+ independent exploration dimensions
+- Scanning/counting across non-overlapping directories or files
 - Collecting data from multiple sources, single assembly step
-- User asks to audit, health-check, investigate, or compare across breadth
-- Any request that implies "find everything about X, Y, and Z"
-
-## Example
-
-See `examples/vault-health-check.md` for a complete walkthrough: pseudocode → 5 parallel sub-agents → assembly. 59:1 context isolation ratio, 5/5 sub-agents first-try success.
+- Requests implying "find everything about X, Y, and Z"
 
 ## When NOT to Use
 
-- Single-step tasks
-- Steps are strongly dependent AND each step can be done with a single Bash/Grep command
-- User gave precise step-by-step instructions
-- Main agent would need to fetch data solely to pass to sub-agents (cost shift, not savings)
+- Single-step tasks or tightly-coupled sequential steps (each doable with one Bash/Grep)
+- User gave precise step-by-step instructions — follow them directly
+- The only reason to read a file is to pass it to a sub-agent (anti-pattern: cost shift, not savings)
 
-### Anti-pattern
+## Example
 
-```
-// WRONG: main agent reads a 50KB file just to pass it to a sub-agent
-//        → 25000 tokens wasted in main context for zero net savings
-main():
-    big_file = read("huge-report.md")    // DON'T
-    result = func_analyze(big_file)      // Cost shifted, not saved
-```
-The correct approach: let the sub-agent read `huge-report.md` inside its own isolated context. Main agent never sees those 25000 tokens.
+See `examples/vault-health-check.md` — 5 parallel sub-agents, 59:1 context isolation, full trace file walkthrough.
