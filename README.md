@@ -41,16 +41,16 @@ git clone https://github.com/m1908293028-boop/pseudocode-first.git \
 Or with skill managers:
 
 ```bash
-npx skills add m1908293028-boop/planning-like-coding
+npx skills add m1908293028-boop/pseudocode-first
 # or
-skilluse install planning-like-coding
+skilluse install pseudocode-first
 ```
 
 Restart Claude Code or run `/skills`.
 
 ## Trigger
 
-Say "check X across the vault," "audit Y," "scan all Z and compare," "do a health check on...," "gather data from multiple places" — or invoke explicitly: `/planning-like-coding`.
+Say "check X across the vault," "audit Y," "scan all Z and compare," "do a health check on...," "gather data from multiple places" — or invoke explicitly: `/pseudocode-first`.
 
 ## When to Use
 
